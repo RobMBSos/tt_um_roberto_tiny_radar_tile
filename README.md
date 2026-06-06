@@ -1,42 +1,54 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+# BioPulse Tile — a tiny vital-sign radar detector
 
-# Tiny Tapeout Verilog Project Template
+[![tinytapeout](https://img.shields.io/badge/Tiny%20Tapeout-project-blue)](https://tinytapeout.com)
 
-- [Read the documentation for project](docs/info.md)
+`tt_um_roberto_tiny_radar_tile` turns a single 8-bit radar/biosignal sample
+stream into vital-sign events and a breathing-rate number — entirely in
+digital logic, no CPU and no software. It detects and classifies breathing
+(normal / fast / slow / irregular), flags apnea, detects a heartbeat band, and
+computes breaths-per-minute.
 
-## What is Tiny Tapeout?
+A built-in demo mode generates synthetic breathing patterns (plus a heartbeat
+ripple), so the design can be shown on the demo board with LEDs and no
+external analog front-end.
 
-Tiny Tapeout is an educational project that aims to make it easier and cheaper than ever to get your digital and analog designs manufactured on a real chip.
+## Architecture
 
-To learn more and get started, visit https://tinytapeout.com.
+```
+sample (ui_in / demo) ─► baseline EMA ─► breathing detect ─► classify FSM
+        │                 fast    EMA ─► heartbeat detect
+        └─────────────────────────────► breaths-per-minute (long divider)
+```
 
-## Set up your Verilog project
+One sample is processed per clock.
 
-1. Add your Verilog files to the `src` folder.
-2. Edit the [info.yaml](info.yaml) and update information about your project, paying special attention to the `source_files` and `top_module` properties. If you are upgrading an existing Tiny Tapeout project, check out our [online info.yaml migration tool](https://tinytapeout.github.io/tt-yaml-upgrade-tool/).
-3. Edit [docs/info.md](docs/info.md) and add a description of your project.
-4. Adapt the testbench to your design. See [test/README.md](test/README.md) for more information.
+## Pinout
 
-The GitHub action will automatically build the ASIC files using [LibreLane](https://www.zerotoasiccourse.com/terminology/librelane/).
+| Group | Pin       | Function                                         |
+|-------|-----------|--------------------------------------------------|
+| in    | `ui[7:0]` | 8-bit radar/biosignal sample (external)          |
+| out   | `uo[7:0]` | status flags, or breaths-per-minute when `uio[2]=1` |
+| bidir | `uio[0]`  | demo mode enable (in)                            |
+| bidir | `uio[1]`  | sensitivity select (in)                          |
+| bidir | `uio[2]`  | BPM readout select (in)                          |
+| bidir | `uio[4:3]`| demo pattern select (in)                         |
+| bidir | `uio[7:5]`| coarse breaths-per-minute bargraph (out)         |
 
-## Enable GitHub actions to build the results page
+Status flags on `uo_out` (when `uio[2]=0`): `[0]` breathing, `[1]` apnea,
+`[2]` fast, `[3]` slow, `[4]` irregular, `[5]` heartbeat, `[6]` above baseline,
+`[7]` valid. Demo patterns (`uio[4:3]`): `00`=normal, `01`=fast, `10`=slow,
+`11`=apnea.
 
-- [Enabling GitHub Pages](https://tinytapeout.com/faq/#my-github-action-is-failing-on-the-pages-part)
+## How to test
 
-## Resources
+```
+cd test
+make
+```
 
-- [FAQ](https://tinytapeout.com/faq/)
-- [Digital design lessons](https://tinytapeout.com/digital_design/)
-- [Learn how semiconductors work](https://tinytapeout.com/siliwiz/)
-- [Join the community](https://tinytapeout.com/discord)
-- [Build your design locally](https://www.tinytapeout.com/guides/local-hardening/)
+Covers reset, the four demo patterns, the heartbeat detector, the
+breaths-per-minute readout, and external-input mode.
 
-## What next?
+## License
 
-- [Submit your design to the next shuttle](https://app.tinytapeout.com/).
-- Edit [this README](README.md) and explain your design, how it works, and how to test it.
-- Share your project on your social network of choice:
-  - LinkedIn [#tinytapeout](https://www.linkedin.com/search/results/content/?keywords=%23tinytapeout) [@TinyTapeout](https://www.linkedin.com/company/100708654/)
-  - Mastodon [#tinytapeout](https://chaos.social/tags/tinytapeout) [@matthewvenn](https://chaos.social/@matthewvenn)
-  - X (formerly Twitter) [#tinytapeout](https://twitter.com/hashtag/tinytapeout) [@tinytapeout](https://twitter.com/tinytapeout)
-  - Bluesky [@tinytapeout.com](https://bsky.app/profile/tinytapeout.com)
+Apache-2.0. See [LICENSE](LICENSE).
