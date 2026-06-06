@@ -38,7 +38,7 @@ pinout:
   uo[3]: "slow breathing / BPM[3]"
   uo[4]: "irregular signal / BPM[4]"
   uo[5]: "heartbeat detected / BPM[5]"
-  uo[6]: "signal above baseline / BPM[6]"
+  uo[6]: "signal quality good / BPM[6]"
   uo[7]: "valid / status / BPM[7]"
 
   # Bidirectional pins
@@ -47,7 +47,7 @@ pinout:
   uio[2]: "BPM readout select (in)"
   uio[3]: "demo pattern select [0] (in)"
   uio[4]: "demo pattern select [1] (in)"
-  uio[5]: "coarse breaths-per-min [5] (out)"
+  uio[5]: "UART TX - streams metrics (out)"
   uio[6]: "coarse breaths-per-min [6] (out)"
   uio[7]: "coarse breaths-per-min [7] (out)"
 

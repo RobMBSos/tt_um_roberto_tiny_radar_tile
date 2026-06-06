@@ -6,8 +6,8 @@ information below and delete any unused sections.
 ## How it works
 
 **BioPulse Tile** turns a single 8-bit radar/biosignal sample stream into
-vital-sign events and a breathing-rate number, using only digital logic — no
-CPU, no software. The datapath processes one sample per clock.
+vital-sign events and metrics, using only digital logic — no CPU, no software.
+The datapath processes one sample per clock.
 
 Processing chain:
 
@@ -18,15 +18,18 @@ Processing chain:
    estimates the DC level; a faster EMA (alpha = 1/2) high-passes the signal
    to isolate the heartbeat band.
 3. **Breathing detector** — a hysteresis comparator against `baseline ± thr`
-   marks one breath per low→high crossing. `uio[1]` selects sensitivity
-   (threshold 16 or 32).
-4. **Classification FSM** — measures the breathing period and labels it
-   normal / fast / slow / irregular, or raises apnea after 255 clocks with no
-   breath.
+   marks one breath per low→high crossing. `uio[1]` selects sensitivity.
+4. **Classification FSM** — labels the breathing period normal / fast / slow /
+   irregular, or raises apnea after 255 clocks with no breath.
 5. **Heartbeat detector** — a second hysteresis path on the high-passed signal
    detects the faster heartbeat component.
-6. **Breaths-per-minute** — a sequential long-division unit computes
-   `BPM = 1000 / breathing-period`.
+6. **Rate estimators** — two sequential long-division units compute
+   breaths-per-minute and heart-rate as `BPM = 1000 / period`.
+7. **Signal-quality** — peak-to-peak amplitude over each frame gives a quality
+   flag.
+8. **UART transmitter** — every frame it streams a 5-byte packet (8N1, LSB
+   first) out of `uio[5]`: `0xAA, breaths-per-min, heart-rate, peak-to-peak,
+   flags`.
 
 ### Reading the outputs
 
@@ -42,13 +45,13 @@ Processing chain:
   | 3   | slow breathing             |
   | 4   | irregular signal / motion  |
   | 5   | heartbeat detected         |
-  | 6   | signal above baseline      |
+  | 6   | signal quality good        |
   | 7   | valid / status             |
 
 - `uio[2]=1` → `uo_out` shows the 8-bit breaths-per-minute value.
 
-`uio[7:5]` always show the top 3 bits of breaths-per-minute as a coarse
-bargraph.
+`uio[5]` is the UART transmit line; `uio[7:6]` show the top two bits of
+breaths-per-minute as a coarse indicator.
 
 ### Controls (`uio[4:0]`, inputs)
 
@@ -70,14 +73,16 @@ make
 ```
 
 It checks reset, the four demo patterns (normal / fast / slow / apnea), the
-heartbeat detector, the breaths-per-minute readout, and external-input mode.
+heartbeat detector, the breaths-per-minute readout, UART activity, and
+external-input mode.
 
 On hardware: set `uio[0]=1`, pick a pattern on `uio[4:3]`, and watch `uo_out`
-on LEDs (flags). Set `uio[2]=1` to read the breaths-per-minute value on the
-same LEDs.
+on LEDs (flags). Set `uio[2]=1` to read breaths-per-minute on the same LEDs,
+and capture `uio[5]` with a 3.3 V UART receiver to read all the streamed
+metrics.
 
 ## External hardware
 
 None required for the demo. For real measurements, connect the digitised
 output of a continuous-wave radar or biosignal analog front-end to
-`ui_in[7:0]`, and LEDs to `uo_out`.
+`ui_in[7:0]`, LEDs to `uo_out`, and optionally a UART receiver to `uio[5]`.

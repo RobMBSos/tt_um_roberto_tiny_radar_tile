@@ -12,12 +12,19 @@ FAST = 2
 SLOW = 3
 IRREG = 4
 HEART = 5
-ABOVE = 6
+QUAL = 6
 VALID = 7
+
+CLKS_PER_SAMPLE = 1     # datapath runs one sample per clock
+FRAME_PERIOD = 512      # clocks between UART frames
 
 
 def bit(value, index):
     return (int(value) >> index) & 1
+
+
+def uart_line(dut):
+    return (int(dut.uio_out.value) >> 5) & 0x1
 
 
 def set_ctrl(dut, demo=1, sens=0, bpm=0, pat=0):
@@ -144,3 +151,22 @@ async def test_external_input(dut):
     assert bit(dut.uo_out.value, VALID) == 1
     assert bit(dut.uo_out.value, BREATH) == 1
     assert bit(dut.uo_out.value, APNEA) == 0
+
+
+@cocotb.test()
+async def test_uart_streaming(dut):
+    dut._log.info("UART metric streaming")
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    set_ctrl(dut, demo=1, pat=0)
+    await do_reset(dut)
+    set_ctrl(dut, demo=1, pat=0)
+
+    # watch the TX line across a full frame period (spans a frame boundary)
+    await ClockCycles(dut.clk, 30)
+    seen_low = False
+    for _ in range(FRAME_PERIOD + 200):
+        if uart_line(dut) == 0:
+            seen_low = True
+            break
+        await ClockCycles(dut.clk, 1)
+    assert seen_low, "UART TX line never left idle - no frame transmitted"

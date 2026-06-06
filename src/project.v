@@ -51,8 +51,10 @@ module tt_um_roberto_tiny_radar_tile (
   localparam [8:0] IRREG_MARG = 9'd24;
   localparam [4:0] WARMUP     = 5'd16;
 
-  localparam [8:0] HEART_TIMEOUT = 9'd40;     // heart "present" window (ticks)
-  localparam [15:0] BPM_NUM      = 16'd1000;  // BPM = BPM_NUM / period (ticks)
+  localparam [8:0]  HEART_TIMEOUT = 9'd40;    // heart "present" window (ticks)
+  localparam [15:0] BPM_NUM       = 16'd1000; // BPM = BPM_NUM / period (ticks)
+  localparam [7:0]  QUAL_THR      = 8'd24;    // peak-to-peak for "good" signal
+  localparam [9:0]  FRAME_PERIOD  = 10'd512;  // clocks between UART frames
 
 
   // FSM states
@@ -222,12 +224,52 @@ module tt_um_roberto_tiny_radar_tile (
   end
 
   // ------------------------------------------------------------------
-  // Breaths-per-minute estimator (BPM = 1000 / breathing period)
+  // Heart period counter -> heart-rate divider
   // ------------------------------------------------------------------
-  wire [7:0] breath_bpm;
+  reg [8:0] heart_cnt;
+  always @(posedge clk) begin
+    if (!rst_n) heart_cnt <= 9'd0;
+    else if (sample_tick) begin
+      if (heart_evt)                heart_cnt <= 9'd0;
+      else if (heart_cnt != 9'h1FF) heart_cnt <= heart_cnt + 9'd1;
+    end
+  end
+
+  // ------------------------------------------------------------------
+  // Rate estimators (BPM = 1000 / period): breathing and heart
+  // ------------------------------------------------------------------
+  wire [7:0] breath_bpm, heart_bpm;
   div_const #(.NUM(BPM_NUM)) u_div_b (
       .clk(clk), .rst_n(rst_n), .start(breath_evt),
       .den(period_cnt), .quot(breath_bpm));
+  div_const #(.NUM(BPM_NUM)) u_div_h (
+      .clk(clk), .rst_n(rst_n), .start(heart_evt),
+      .den(heart_cnt), .quot(heart_bpm));
+
+  // ------------------------------------------------------------------
+  // Signal-quality (peak-to-peak) + periodic UART frame timer
+  // ------------------------------------------------------------------
+  reg [7:0] s_max, s_min, pp_latch;
+  reg [9:0] frame_cnt;
+  reg       frame_tick;
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      s_max<=8'd0; s_min<=8'd255; pp_latch<=8'd0; frame_cnt<=10'd0; frame_tick<=1'b0;
+    end else begin
+      frame_tick <= 1'b0;
+      if (sample_tick) begin
+        if (sample > s_max) s_max <= sample;
+        if (sample < s_min) s_min <= sample;
+        if (frame_cnt == FRAME_PERIOD-1) begin
+          pp_latch <= (s_max > s_min) ? (s_max - s_min) : 8'd0;
+          s_max<=8'd0; s_min<=8'd255; frame_cnt<=10'd0; frame_tick<=1'b1;
+        end else begin
+          frame_cnt <= frame_cnt + 10'd1;
+        end
+      end
+    end
+  end
+  wire quality_good = (pp_latch >= QUAL_THR);
 
   // ------------------------------------------------------------------
   // Outputs
@@ -237,7 +279,7 @@ module tt_um_roberto_tiny_radar_tile (
   wire breathing = warmed && (state != S_INIT) && (state != S_APNEA);
 
   wire [7:0] flags = {warmed,            // [7] valid / status
-                      above,             // [6] signal above baseline
+                      quality_good,      // [6] signal quality good
                       heart_detected,    // [5] heartbeat detected
                       (state == S_IRREG),// [4] irregular
                       (state == S_SLOW), // [3] slow breathing
@@ -247,9 +289,50 @@ module tt_um_roberto_tiny_radar_tile (
 
   assign uo_out = bpm_sel ? breath_bpm : flags;
 
-  // uio[7:5] always show a coarse breaths-per-minute bargraph (top 3 bits)
+  // ------------------------------------------------------------------
+  // UART transmitter + frame sequencer (8N1, LSB first).
+  //   frame: 0xAA, breath_bpm, heart_bpm, quality (pp), flags
+  // ------------------------------------------------------------------
+  reg  [7:0] tx_data;
+  reg        tx_start;
+  wire       tx_busy;
+  wire       uart_tx_line;
+  uart_tx #(.CLKS_PER_BIT(8)) u_uart (
+      .clk(clk), .rst_n(rst_n), .start(tx_start), .data(tx_data),
+      .tx(uart_tx_line), .busy(tx_busy));
+
+  reg [2:0] fr_idx;
+  reg       fr_active;
+  reg [1:0] fr_wait;
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      fr_idx<=3'd0; fr_active<=1'b0; tx_start<=1'b0; tx_data<=8'd0; fr_wait<=2'd0;
+    end else begin
+      tx_start <= 1'b0;
+      if (!fr_active) begin
+        if (frame_tick) begin fr_active<=1'b1; fr_idx<=3'd0; fr_wait<=2'd0; end
+      end else if (fr_wait != 2'd0) begin
+        fr_wait <= fr_wait - 2'd1;
+      end else if (!tx_busy) begin
+        case (fr_idx)
+          3'd0: tx_data <= 8'hAA;
+          3'd1: tx_data <= breath_bpm;
+          3'd2: tx_data <= heart_bpm;
+          3'd3: tx_data <= pp_latch;
+          default: tx_data <= flags;
+        endcase
+        tx_start <= 1'b1;
+        fr_wait  <= 2'd2;
+        if (fr_idx == 3'd4) fr_active <= 1'b0;
+        else                fr_idx <= fr_idx + 3'd1;
+      end
+    end
+  end
+
+  // uio[5] = UART TX ; uio[7:6] = coarse breaths-per-minute (top bits)
   assign uio_out[4:0] = 5'd0;
-  assign uio_out[7:5] = breath_bpm[7:5];
+  assign uio_out[5]   = uart_tx_line;
+  assign uio_out[7:6] = breath_bpm[7:6];
 
   wire _unused = &{ena, uio_in[7:5], 1'b0};
 
@@ -300,4 +383,48 @@ module div_const #(parameter [15:0] NUM = 16'd1000) (
 
   // rem/q stay below their MSB in practice; tie off the unused top bits
   wire _unused_div = &{1'b0, rem[9], q[9]};
+endmodule
+
+
+// ====================================================================
+//  Simple UART transmitter, 8N1, LSB first.
+// ====================================================================
+module uart_tx #(parameter integer CLKS_PER_BIT = 8) (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       start,
+    input  wire [7:0] data,
+    output reg        tx,
+    output reg        busy
+);
+  reg [9:0] shifter;     // {stop=1, data[7:0], start=0}
+  reg [3:0] nbits;
+  reg [7:0] baud_cnt;
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      tx <= 1'b1; busy <= 1'b0; shifter <= 10'h3FF; nbits <= 4'd0; baud_cnt <= 8'd0;
+    end else if (!busy) begin
+      tx <= 1'b1;
+      if (start) begin
+        shifter  <= {1'b1, data, 1'b0};   // stop, data[7:0], start
+        nbits    <= 4'd10;
+        baud_cnt <= CLKS_PER_BIT - 1;
+        busy     <= 1'b1;
+      end
+    end else begin
+      if (baud_cnt != 8'd0) begin
+        baud_cnt <= baud_cnt - 8'd1;
+      end else begin
+        baud_cnt <= CLKS_PER_BIT - 1;
+        tx       <= shifter[0];
+        shifter  <= {1'b1, shifter[9:1]};
+        nbits    <= nbits - 4'd1;
+        if (nbits == 4'd1) begin
+          busy <= 1'b0;
+          tx   <= 1'b1;
+        end
+      end
+    end
+  end
 endmodule
