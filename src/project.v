@@ -389,7 +389,7 @@ endmodule
 // ====================================================================
 //  Simple UART transmitter, 8N1, LSB first.
 // ====================================================================
-module uart_tx #(parameter integer CLKS_PER_BIT = 8) (
+module uart_tx #(parameter [7:0] CLKS_PER_BIT = 8'd8) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       start,
